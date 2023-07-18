@@ -1,0 +1,222 @@
+---
+title: "Where has median income increased the most in Louisiana?"
+author: "Gabe Necula"
+date: "2023-07-18"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(tidycensus)
+library(sf)
+library(ggsflabel)
+library(scales)
+library(acs)
+```
+
+
+```{r table lookup, include=FALSE}
+##Table Lookup
+acs.lookup(2021, span = 5, table.name = "Income", dataset = "acs", case.sensitive = F)
+```
+
+```{r sf,include=FALSE}
+
+# define years using purrr::lst to automatically creates a named list
+# which will help later when we combine the results in a single tibble
+years <- lst(2016, 2021) 
+
+# map out regions for each county
+
+Northwest <- c(
+  "Bienville Parish",
+  "Bossier Parish",
+  "Caddo Parish",
+  "Claiborne Parish",
+  "De Soto Parish",
+  "Jackson Parish",
+  "Lincoln Parish",
+  "Natchitoches Parish",
+  "Red River Parish",
+  "Sabine Parish",
+  "Webster Parish"
+  )
+
+Northeast <- c(
+  "Caldwell Parish", 
+  "East Carroll Parish",
+  "Franklin Parish",
+  "Madison Parish",
+  "Morehouse Parish",
+  "Ouachita Parish",
+  "Richland Parish",
+  "Tensas Parish",
+  "Union Parish",
+  "West Carroll Parish"
+  )
+
+Central <- c(
+  "Avoyelles Parish",
+  "Catahoula Parish",
+  "Concordia Parish",
+  "Grant Parish",
+  "La Salle Parish",
+  "Rapides Parish",
+  "Vernon Parish",
+  "Winn Parish"
+  )
+Southwest <- c(
+  "Allen Parish",
+  "Beauregard Parish",
+  "Calcasieu Parish",
+  "Cameron Parish",
+  "Jefferson Davis Parish"
+  )
+Acadiana <- c(
+  "Acadia Parish",
+  "Evangeline Parish",
+  "Iberia Parish",
+  "Lafayette Parish",
+  "St. Landry Parish",
+  "St. Martin Parish",
+  "Vermilion Parish"
+  )
+Capital <- c(
+  "Ascension Parish",
+  "East Baton Rouge Parish",
+  "East Feliciana Parish", 
+  "Iberville Parish",
+  "Livingston Parish",
+  "Pointe Coupee Parish",
+  "St. Helena Parish",
+  "West Baton Roug Parishe",
+  "West Feliciana Parish"
+  )
+Bayou <- c(
+  "Assumption Parish",
+  "Lafourche Parish",
+  "St. Mary Parish",
+  "Terrebonne Parish"
+  )
+Southeast <- c(
+  "Jefferson Parish",
+  "Orleans Parish",
+  "Plaquemines Parish",
+  "St. Bernard Parish",
+  "St. Charles Parish",
+  "St. James Parish",
+  "St. John the Baptist Parish",
+  "St. Tammany Parish",
+  "Tangipahoa Parish",
+  "Washington Parish"
+  )
+
+list_regions <- c(Acadiana,Bayou,Capital,Central,Northeast,Northwest,Southeast,Southwest)
+
+# which census variables?
+my_vars <- c(
+  total_pop = "B01003_001",
+  median_income = "B19013_001"
+  )
+
+# loop over list of years and get 1 year acs estimates
+louisiana_multi_year <- map_dfr(
+  years,
+  ~ get_acs(
+      geography = "county",
+      variables = my_vars,
+      state = "LA",
+      county = NULL,
+      year = .x,
+      survey = "acs5",
+      geometry = FALSE
+      ),
+  .id = "year"  # when combining results, add id var (name of list item)
+  ) %>%
+  select(-moe) %>%  # shhhh
+  arrange(variable, NAME) %>% 
+  print()
+```
+
+```{r percent change, echo=FALSE}
+louisiana_16_21 <- louisiana_multi_year %>% 
+  spread(year, estimate, sep = "_") %>% 
+  mutate(
+    year_2016 = if_else(
+      variable == "median_income",
+      round(year_2016 * 1.15, 0),  # multiply 2012 by cpi inflation factor
+      year_2016
+      ),
+    change = year_2021 - year_2016,
+    pct_change = change / year_2016 * 100
+    )
+
+# which counties had the largest percent increase in median income?
+ordered_list = louisiana_16_21 %>% 
+  filter(variable == "median_income") %>% 
+  arrange(desc(pct_change))
+
+ordered_list %>% 
+  print(n = nrow(ordered_list))
+```
+
+```{r map setup, include=FALSE}
+# loop over year list and get acs estimates with sf geometry
+louisiana_multi_year_list <- map(
+  years,
+  ~ get_acs(
+      geography = "county",
+      variables = my_vars,
+      state = "LA",
+      county = NULL,
+      year = .x,
+      survey = "acs5",
+      geometry = TRUE,
+      cb = TRUE
+      ),
+  ) %>%
+  map2(years, ~ mutate(.x, year = .y))  # add year as id variable
+
+# reshape and calculate percent change in income
+louisiana_geo <- reduce(louisiana_multi_year_list, rbind) %>% 
+  select(-moe) %>% 
+  spread(year, estimate, sep = "_") %>% 
+  fill(year_2016) %>%
+  mutate(
+    year_2016 = if_else(
+      variable == "median_income",
+      round(year_2016 * 1.15, 0),  # multiply 2012 by cpi inflation factor
+      year_2016
+      ),
+    change = year_2021 - year_2016,
+    pct_change = change / year_2016
+    ) %>% 
+  filter(!is.na(year_2021)) %>% 
+  print()
+```
+
+```{r map, echo=FALSE, warning=FALSE, fig.align = 'center'}
+# make that map
+louisiana_geo %>%
+  filter(variable == "median_income") %>% 
+  separate(NAME, into = c("name", NA), sep = " County") %>%  # remove
+  ggplot() +
+  geom_sf(aes(fill = pct_change)) +
+  coord_sf(crs = st_crs(louisiana_geo), datum = NA) + 
+  geom_sf_label_repel(
+    aes(label = name),
+    fill = "gray95",
+    size = 2.5,
+    alpha = 0.9
+    ) +
+  scale_fill_viridis_c("", labels = percent_format(5)) +
+  labs(
+    title = "Where has median income increased the most?",
+    subtitle = "Louisiana, 2016 - 2021"
+    ) +
+  theme_void()
+```
