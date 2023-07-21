@@ -1,0 +1,237 @@
+---
+title: "Testing_Shapefiles"
+author: "Gabe Necula"
+date: "2023-07-21"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r cimports}
+library(sf)
+library(rgeos)
+library(dplyr)
+library(leaflet)
+```
+
+```{r import shapefile}
+
+# This code imports the Louisiana shapefile.
+# Shapefile downloaded from DOTD
+# https://hub.arcgis.com/datasets/060a07fec0914e4c9e596283f62fe81d/explore?location=31.275640%2C-91.992236%2C7.59
+louisiana_sf <- st_read("C:\\Users\\gnecula\\Desktop\\R Map Templates\\Parishes\\BNDY_DOTD_ParishBoundaries.shp")
+
+```
+
+```{r define regions}
+
+#Create categorical list for each region
+
+Northwest <- c(
+  "Bienville",
+  "Bossier",
+  "Caddo",
+  "Claiborne",
+  "DeSoto",
+  "Jackson",
+  "Lincoln",
+  "Natchitoches",
+  "Red River",
+  "Sabine",
+  "Webster"
+  )
+
+Northeast <- c(
+  "Caldwell", 
+  "East Carroll",
+  "Franklin",
+  "Madison",
+  "Morehouse",
+  "Ouachita",
+  "Richland",
+  "Tensas",
+  "Union",
+  "West Carroll"
+  )
+
+Central <- c(
+  "Avoyelles",
+  "Catahoula",
+  "Concordia",
+  "Grant",
+  "LaSalle",
+  "Rapides",
+  "Vernon",
+  "Winn"
+  )
+Southwest <- c(
+  "Allen",
+  "Beauregard",
+  "Calcasieu",
+  "Cameron",
+  "Jefferson Davis"
+  )
+Acadiana <- c(
+  "Acadia",
+  "Evangeline",
+  "Iberia",
+  "Lafayette",
+  "St. Landry",
+  "St. Martin",
+  "Vermilion"
+  )
+Capital <- c(
+  "Ascension",
+  "East Baton Rouge",
+  "East Feliciana", 
+  "Iberville",
+  "Livingston",
+  "Pointe Coupee",
+  "St. Helena",
+  "West Baton Rouge",
+  "West Feliciana"
+  )
+Bayou <- c(
+  "Assumption",
+  "Lafourche",
+  "St. Mary",
+  "Terrebonne"
+  )
+
+Southeast <- c(
+  "Jefferson",
+  "Orleans",
+  "Plaquemines",
+  "St. Bernard",
+  "St. Charles",
+  "St. James",
+  "St. John the Baptist",
+  "St. Tammany",
+  "Tangipahoa",
+  "Washington"
+  )
+
+# Add the region classifications to a new column in the shapefile.
+
+region_names<- c()
+
+for (i in louisiana_sf$ParishName) {
+  if (i %in% Acadiana){
+    region_names <- append(region_names,"Acadiana")
+    }
+  else if (i %in% Bayou){
+    region_names <- append(region_names,"Bayou")
+  }
+  else if (i %in% Capital){
+    region_names <- append(region_names,"Capital")
+  }
+  else if (i %in% Central){
+    region_names <- append(region_names,"Central")
+  }
+  else if (i %in% Northeast){
+    region_names <- append(region_names,"Northeast")
+  }
+  else if (i %in% Northwest){
+    region_names <- append(region_names,"Northwest")
+  }
+  else if (i %in% Southeast){
+    region_names <- append(region_names,"Southeast")
+  }
+  else if (i %in% Southwest){
+    region_names <- append(region_names,"Southwest")
+  }
+  else{
+    print(i)
+  }
+}
+
+louisiana_sf <- cbind(louisiana_sf,region_names)
+
+```
+
+```{r grouping}
+
+# Create two group shapefiles by their region and merge the polygons.
+
+region_sf <- louisiana_sf %>% 
+  group_by(region_names) %>% 
+  summarise()
+
+parish_sf <- louisiana_sf %>% 
+  group_by(ParishName) %>% 
+  summarise()
+
+```
+
+```{r leaflet}
+
+#Create leaflet maps for regions and parishes.
+
+region_map <- leaflet() %>%
+  setView(lng = -92.329102, lat = 30.391830, zoom = 5)
+
+parish_map <- leaflet() %>%
+  setView(lng = -92.329102, lat = 30.391830, zoom = 5)
+
+
+
+# Add the MULTIPOLYGON data to the maps
+
+region_map <- region_map %>% 
+  addPolygons(data = region_sf)%>% 
+  addProviderTiles(providers$OpenStreetMap)
+
+parish_map <- parish_map %>% 
+  addPolygons(data = parish_sf)%>% 
+  addProviderTiles(providers$OpenStreetMap)
+
+```
+
+```{r add column data}
+
+# Using a sample column for this example
+sample_data_points = c(900,233,554,461,874,123,212,233)
+
+region_sf <- cbind(region_sf,sample_data_points)
+
+```
+
+```{r testing map}
+
+# Create palette and scale for map data.
+bins <- c(0, 10, 20, 50, 100, 200, 500, 1000, Inf)
+pal <- colorBin("YlOrRd", domain = region_sf$sample_data_points, bins = bins)
+
+#Create labels for map data that include region names and values.
+labels <- sprintf(
+  "<strong>%s</strong><br/>%g values",
+  region_sf$region_names, region_sf$sample_data_points
+) %>% lapply(htmltools::HTML)
+
+#Add polygons to leaflet map.
+region_map %>% addPolygons(
+  data = region_sf,
+  fillColor = ~pal(sample_data_points),
+  weight = 2,
+  opacity = 1,
+  color = "white",
+  dashArray = "3",
+  fillOpacity = 0.7,
+  highlightOptions = highlightOptions(
+    weight = 5,
+    color = "#666",
+    dashArray = "",
+    fillOpacity = 0.7,
+    bringToFront = TRUE),
+  label = labels,
+  labelOptions = labelOptions(
+    style = list("font-weight" = "normal", padding = "3px 8px"),
+    textsize = "15px",
+    direction = "auto"))%>%
+  addLegend(pal = pal, values = sample_data_points, opacity = 0.7,
+    position = "bottomright")
+```
