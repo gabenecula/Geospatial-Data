@@ -1,0 +1,380 @@
+---
+title: "Education Data Map"
+author: "Gabe Necula"
+date: "2023-07-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Import Libraries
+
+```{r cimports}
+library(sf)
+library(rgeos)
+library(dplyr)
+library(leaflet)
+library(tidyverse)
+library(tidycensus)
+library(tidyr)
+library(sf)
+library(ggsflabel)
+library(scales)
+library(acs)
+```
+
+#Import shapefile and convert to sf.
+
+```{r import shapefile}
+
+# This code imports the Louisiana shapefile.
+# Shapefile downloaded from DOTD
+# https://hub.arcgis.com/datasets/060a07fec0914e4c9e596283f62fe81d/explore?location=31.275640%2C-91.992236%2C7.59
+louisiana_sf <- st_read("C:\\Users\\gnecula\\Desktop\\R Map Templates\\Parishes\\BNDY_DOTD_ParishBoundaries.shp")
+
+```
+
+#Define regional categories.
+
+```{r define regions}
+
+#Create categorical list for each region
+
+Northwest <- c(
+  "Bienville",
+  "Bossier",
+  "Caddo",
+  "Claiborne",
+  "DeSoto",
+  "Jackson",
+  "Lincoln",
+  "Natchitoches",
+  "Red River",
+  "Sabine",
+  "Webster"
+  )
+
+Northeast <- c(
+  "Caldwell", 
+  "East Carroll",
+  "Franklin",
+  "Madison",
+  "Morehouse",
+  "Ouachita",
+  "Richland",
+  "Tensas",
+  "Union",
+  "West Carroll"
+  )
+
+Central <- c(
+  "Avoyelles",
+  "Catahoula",
+  "Concordia",
+  "Grant",
+  "LaSalle",
+  "Rapides",
+  "Vernon",
+  "Winn"
+  )
+Southwest <- c(
+  "Allen",
+  "Beauregard",
+  "Calcasieu",
+  "Cameron",
+  "Jefferson Davis"
+  )
+Acadiana <- c(
+  "Acadia",
+  "Evangeline",
+  "Iberia",
+  "Lafayette",
+  "St. Landry",
+  "St. Martin",
+  "Vermilion"
+  )
+Capital <- c(
+  "Ascension",
+  "East Baton Rouge",
+  "East Feliciana", 
+  "Iberville",
+  "Livingston",
+  "Pointe Coupee",
+  "St. Helena",
+  "West Baton Rouge",
+  "West Feliciana"
+  )
+Bayou <- c(
+  "Assumption",
+  "Lafourche",
+  "St. Mary",
+  "Terrebonne"
+  )
+
+Southeast <- c(
+  "Jefferson",
+  "Orleans",
+  "Plaquemines",
+  "St. Bernard",
+  "St. Charles",
+  "St. James",
+  "St. John the Baptist",
+  "St. Tammany",
+  "Tangipahoa",
+  "Washington"
+  )
+
+# Add the region classifications to a new column in the shapefile.
+
+region_names<- c()
+
+for (i in louisiana_sf$ParishName) {
+  if (i %in% Acadiana){
+    region_names <- append(region_names,"Acadiana")
+    }
+  else if (i %in% Bayou){
+    region_names <- append(region_names,"Bayou")
+  }
+  else if (i %in% Capital){
+    region_names <- append(region_names,"Capital")
+  }
+  else if (i %in% Central){
+    region_names <- append(region_names,"Central")
+  }
+  else if (i %in% Northeast){
+    region_names <- append(region_names,"Northeast")
+  }
+  else if (i %in% Northwest){
+    region_names <- append(region_names,"Northwest")
+  }
+  else if (i %in% Southeast){
+    region_names <- append(region_names,"Southeast")
+  }
+  else if (i %in% Southwest){
+    region_names <- append(region_names,"Southwest")
+  }
+  else{
+    print(i)
+  }
+}
+
+```
+
+#Create sf for region and parish levels.
+
+```{r grouping}
+
+# Create two group shapefiles by their region and merge the polygons.
+
+parish_sf <- louisiana_sf %>% 
+  group_by(ParishName) %>% 
+  summarise()
+
+#Add Region Name Category to sf file for Region.
+
+region_sf <- cbind(louisiana_sf,region_names) %>%
+  group_by(region_names) %>% 
+  summarise()
+
+
+```
+
+#Create leflet Map and skeleton for Louisiana.
+
+```{r leaflet}
+
+#Create leaflet maps for regions and parishes.
+
+region_map <- leaflet() %>%
+  setView(lng = -92.329102, lat = 30.391830, zoom = 10)
+
+parish_map <- leaflet() %>%
+  setView(lng = -92.329102, lat = 30.391830, zoom = 10)
+
+
+# Add the MULTIPOLYGON data to the maps
+
+region_map <- region_map %>% 
+  addPolygons(data = region_sf)%>% 
+  addProviderTiles(providers$Stamen.Toner)
+
+parish_map <- parish_map %>% 
+  addPolygons(data = parish_sf)%>% 
+  addProviderTiles(providers$Stamen.Toner)
+
+```
+
+#Imports dataframe from census, adds parish level percentages.
+
+```{r census data}
+
+# Specify the year range
+years <- 2015:2021
+
+# Louisiana FIPS code
+state_fips <- "22"
+
+# Function to fetch population data for a specific year and state FIPS code
+get_population_data <- function(year) {
+  pop_data <- get_acs(
+    geography = "county",
+    variables = "B16010_041",
+    year = year,
+    survey = "acs5",
+    state = state_fips
+  )
+  
+  # Add a year column
+  pop_data$year <- year
+  
+  return(pop_data)
+}
+
+
+# Fetch data for each year and combine into a single dataframe
+data_frames <- lapply(years, get_population_data)
+combined_data <- bind_rows(data_frames)
+
+# Clean up the dataframe and spread it to have columns for each year
+parish_df <- combined_data %>%
+  select(NAME, GEOID, year, estimate) %>%
+  spread(year, estimate, sep = "_") %>%
+  rename(
+    Parish = NAME,
+    GEOID = GEOID
+  )
+
+# Optional: Convert GEOID to numeric format
+parish_df$GEOID <- as.numeric(parish_df$GEOID)
+
+# Add percentages to df
+parish_df <- parish_df %>% 
+  mutate(
+    change_2015_2021 = year_2021 - year_2015,
+    pct_change_2015_2021 = change_2015_2021 / year_2015 * 100
+    )
+
+parish_sf <- cbind(parish_sf,pct_change_2015_2021 = parish_df$pct_change_2015_2021)
+parish_sf <- cbind(parish_sf, data2015 = parish_df$year_2015)
+parish_sf <- cbind(parish_sf, data2021 = parish_df$year_2021)
+```
+
+#Parish level map
+
+```{r census map}
+
+# Create palette and scale for map data.
+bins <- c(50,40,30,20,10,0,-10,-20,-30,-40,-50)
+pal <- colorBin("RdYlBu", domain = parish_sf$pct_change_2015_2021, bins = bins)
+
+#Create labels for map data that include region names and values.
+labels <- sprintf(
+  "<strong>%s</strong><br/><b>%g&#37;</b> change in number of residents 25 and older <br/>with a bachelor's degree or higher from 2015 to 2021.<br/><b>2015:</b> %g<br/><b>2021:</b> %g",
+  parish_sf$ParishName, parish_sf$pct_change_2015_2021, parish_sf$data2015, parish_sf$data2021
+) %>% lapply(htmltools::HTML)
+
+#Add polygons to leaflet map.
+percent_change_parish <- parish_map %>% addPolygons(
+  data = parish_sf,
+  fillColor = ~pal(parish_sf$pct_change_2015_2021),
+  weight = 2,
+  opacity = 1,
+  color = "white",
+  dashArray = "3",
+  fillOpacity = 0.7,
+  highlightOptions = highlightOptions(
+    weight = 5,
+    color = "#666",
+    dashArray = "",
+    fillOpacity = 0.7,
+    bringToFront = TRUE),
+  label = labels,
+  labelOptions = labelOptions(
+    style = list("font-weight" = "normal", padding = "3px 8px"),
+    textsize = "15px",
+    direction = "auto"))%>%
+  addLegend(pal = pal, values = parish_sf$pct_change_2015_2021, labFormat = labelFormat(
+    prefix = "(", suffix = ")%", between = ", ",
+  ), title = "Percentage Change in Number of<br/>Bachelor's Degrees or Higher", opacity = 0.7,
+    position = "bottomright")
+
+
+
+percent_change_parish
+
+library(htmlwidgets)
+#saveWidget(percent_change_parish, file="percent_change_in_education_parish.html")
+
+```
+
+#Dataframe for the regional level
+
+```{r regional dataframe}
+# Create a data frame for the regional-level data
+region_df <- cbind(parish_df, region_names)
+
+# Group by sum using dplyr
+agg_tbl <- region_df %>% group_by(region_names) %>% 
+  summarise(sum_region_2015 = sum(year_2015),
+            sum_region_2021 = sum(year_2021),
+            .groups = 'drop')
+region_df <- agg_tbl %>% as.data.frame()
+
+region_df <- region_df %>% 
+  mutate(
+    change_2015_2021 = sum_region_2021 - sum_region_2015,
+    pct_change_2015_2021 = change_2015_2021 / sum_region_2015 * 100
+    )
+
+region_sf <- cbind(region_sf,pct_change_2015_2021 = region_df$pct_change_2015_2021)
+region_sf <- cbind(region_sf, data2015 = region_df$sum_region_2015)
+region_sf <- cbind(region_sf, data2021 = region_df$sum_region_2021)
+```
+
+#Regional level map
+
+```{r regional graph}
+
+# Create palette and scale for map data.
+bins <- c(-25,-20,-15,-10,-5,0,5,10,15,20,25)
+pal <- colorBin('RdYlBu', domain = region_sf$pct_change_2015_2021, bins = bins)
+
+#Create labels for map data that include region names and values.
+labels <- sprintf(
+  "<strong>%s</strong><br/><b>%g&#37;</b> change in number of residents 25 and older <br/>with a bachelor's degree or higher from 2015 to 2021.<br/><b>2015:</b> %g<br/><b>2021:</b> %g",
+  region_sf$region_names, region_sf$pct_change_2015_2021, region_sf$data2015,region_sf$data2021
+) %>% lapply(htmltools::HTML)
+
+
+
+#Add polygons to leaflet map.
+percent_change_region <- region_map %>% addPolygons(
+  data = region_sf,
+  fillColor = ~pal(region_sf$pct_change_2015_2021),
+  weight = 2,
+  opacity = 1,
+  color = "white",
+  dashArray = "3",
+  fillOpacity = 0.7,
+  highlightOptions = highlightOptions(
+    weight = 5,
+    color = "#666",
+    dashArray = "",
+    fillOpacity = 0.7,
+    bringToFront = TRUE),
+  label = labels,
+  labelOptions = labelOptions(
+    style = list("font-weight" = "normal", padding = "3px 8px"),
+    textsize = "15px",
+    direction = "auto"))%>%
+  addLegend(pal = pal, values = region_sf$pct_change_2015_2021, labFormat = labelFormat(
+    prefix = "(", suffix = ")%", between = ", ",
+  ), title = "Percentage Change in Number of<br/>Bachelor's Degrees or Higher", opacity = 0.7,
+    position = "bottomright")
+
+percent_change_region
+
+#saveWidget(percent_change_region, file="percent_change_in_educaiton_region.html")
+```
